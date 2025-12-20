@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -35,7 +34,10 @@ var videos []VideoInfo
 func loadJSON() {
 	file, err := os.ReadFile("videos.json")
 	if err != nil {
-		log.Fatalf("Error leyendo videos.json: %v", err)
+		file, err = os.ReadFile("videos.json")
+		if err != nil {
+			log.Fatalf("Error leyendo videos.json: %v", err)
+		}
 	}
 
 	err = json.Unmarshal(file, &videos)
@@ -49,7 +51,7 @@ func loadJSON() {
 // --- Buscar video por ID ---
 func findVideoByID(id string) *VideoInfo {
 	for _, v := range videos {
-		if strings.EqualFold(v.ID, id) {
+		if strings.ToLower(v.ID) == strings.ToLower(id) {
 			return &v
 		}
 	}
@@ -60,9 +62,16 @@ func findVideoByID(id string) *VideoInfo {
 // Endpoint: Video único
 // ----------------------
 func getSingleVideo(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	if id == "" {
+		http.Error(w, "Falta el parámetro 'id'", http.StatusBadRequest)
+		return
+	}
 
 	video := findVideoByID(id)
+
 	if video == nil {
 		http.Error(w, "Video no encontrado", http.StatusNotFound)
 		return
@@ -72,44 +81,36 @@ func getSingleVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 // ----------------------
-// Endpoint: Videos PAGINADOS + RANDOM
+// Endpoint: Videos paginados
 // ----------------------
 func getPaginatedVideos(w http.ResponseWriter, r *http.Request) {
 	pageStr := r.URL.Query().Get("page")
 	limitStr := r.URL.Query().Get("limit")
 
-	page, _ := strconv.Atoi(pageStr)
-	limit, _ := strconv.Atoi(limitStr)
+	page, errP := strconv.Atoi(pageStr)
+	limit, errL := strconv.Atoi(limitStr)
 
-	if page < 0 {
+	if errP != nil || page < 0 {
 		page = 0
 	}
-	if limit <= 0 {
+	if errL != nil || limit <= 0 {
 		limit = 10
 	}
-
-	// 👉 COPIA para no romper el orden original
-	shuffled := make([]VideoInfo, len(videos))
-	copy(shuffled, videos)
-
-	// 👉 RANDOM REAL
-	rand.Shuffle(len(shuffled), func(i, j int) {
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-	})
 
 	startIdx := page * limit
 	endIdx := startIdx + limit
 
-	if startIdx >= len(shuffled) {
+	if startIdx >= len(videos) {
 		sendJSON(w, []VideoInfo{})
 		return
 	}
 
-	if endIdx > len(shuffled) {
-		endIdx = len(shuffled)
+	if endIdx > len(videos) {
+		endIdx = len(videos)
 	}
 
-	sendJSON(w, shuffled[startIdx:endIdx])
+	paginated := videos[startIdx:endIdx]
+	sendJSON(w, paginated)
 }
 
 // ----------------------
@@ -126,6 +127,7 @@ func searchVideos(w http.ResponseWriter, r *http.Request) {
 			results = append(results, v)
 			break
 		}
+
 		if q != "" && strings.Contains(strings.ToLower(v.Title), q) {
 			results = append(results, v)
 		}
@@ -135,11 +137,11 @@ func searchVideos(w http.ResponseWriter, r *http.Request) {
 }
 
 // ----------------------
-// Endpoint: Random único
+// Endpoint: Random
 // ----------------------
 func getRandom(w http.ResponseWriter, r *http.Request) {
 	if len(videos) == 0 {
-		http.Error(w, "No hay videos", http.StatusInternalServerError)
+		http.Error(w, "No hay videos cargados", http.StatusInternalServerError)
 		return
 	}
 
@@ -151,7 +153,7 @@ func getRandom(w http.ResponseWriter, r *http.Request) {
 // Endpoint: Sitemap
 // ----------------------
 func getSitemap(w http.ResponseWriter, r *http.Request) {
-	baseURL := "https://viewdiful.vercel.app"
+	baseURL := "https://viewdiful.vercel.app" // CAMBIA ESTO
 
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 
@@ -186,11 +188,10 @@ func sendJSON(w http.ResponseWriter, data interface{}) {
 // MAIN
 // ----------------------
 func main() {
-	rand.Seed(time.Now().UnixNano()) // 🎲 RANDOM REAL
-
 	loadJSON()
 
 	r := mux.NewRouter()
+
 	r.HandleFunc("/video/{id}", getSingleVideo).Methods("GET")
 	r.HandleFunc("/videos", getPaginatedVideos).Methods("GET")
 	r.HandleFunc("/search", searchVideos).Methods("GET")
